@@ -1,4 +1,5 @@
-#[macro_use]
+#![allow(clippy::redundant_field_names)]
+
 extern crate diesel;
 
 use crate::data::{dtfb, itsf};

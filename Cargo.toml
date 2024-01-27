@@ -13,12 +13,11 @@ actix-web = { version = "4.0.0", features = ["rustls"] }
 actix-web-httpauth = "0.6.0"
 actix-files = "0.6.0"
 chrono = { version = "^0", features = ["serde"] }
-diesel = { version = "2.0", features = ["sqlite", "r2d2", "chrono"] }
+diesel = { version = "2.0", features = ["r2d2", "chrono", "postgres", "postgres_backend", "serde_json"] }
 diesel_migrations = "2.0"
 dotenv = "0.15.0"
 env_logger = "0.9.0"
 futures-util = "0.3.21"
-libsqlite3-sys = { version = "0.24.2", features = ["bundled"] }
 lazy_static = "*"
 log = "0.4.17"
 num_enum = "0.5.7"

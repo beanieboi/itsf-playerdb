@@ -2,7 +2,7 @@
 
 diesel::table! {
     players (itsf_id) {
-        itsf_id -> Integer,
-        json_data -> Binary,
+        itsf_id -> Int4,
+        json_data -> Jsonb,
     }
 }

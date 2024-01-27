@@ -12,15 +12,6 @@ pub struct BackgroundOperationProgress {
 }
 
 impl BackgroundOperationProgress {
-    pub fn get_title(&self) -> &str {
-        &self.title
-    }
-
-    pub fn get_progress(&self) -> (usize, usize) {
-        let inner = self.inner.lock().expect("failed to lock mutex");
-        (inner.progress, inner.max)
-    }
-
     pub fn set_progress(&self, progress: usize, max: usize) {
         let mut inner = self.inner.lock().expect("failed to lock mutex");
         inner.progress = progress;
@@ -36,11 +27,6 @@ impl BackgroundOperationProgress {
         let mut inner = self.inner.lock().expect("failed to lock mutex");
         log::error!("{}", entry);
         inner.log.push(entry);
-    }
-
-    pub fn has_finished(&self) -> bool {
-        let progress = self.get_progress();
-        progress.0 >= progress.1
     }
 
     pub fn new(title: &str, max: usize) -> (Arc<BackgroundOperationProgress>, Weak<BackgroundOperationProgress>) {

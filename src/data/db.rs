@@ -1,4 +1,4 @@
-use diesel::sqlite::SqliteConnection;
+use diesel::pg::PgConnection;
 use diesel::{prelude::*, Insertable, Queryable};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -9,11 +9,11 @@ use crate::schema::*;
 #[diesel(table_name = players)]
 struct DbPlayer {
     itsf_id: i32,
-    json_data: Vec<u8>,
+    json_data: serde_json::Value,
 }
 
 pub struct DbConnection {
-    conn: SqliteConnection,
+    conn: PgConnection,
 }
 
 fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
@@ -25,7 +25,8 @@ fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
 
 impl DbConnection {
     pub fn open(path: &str) -> Self {
-        let conn = SqliteConnection::establish(path).expect("Failed to open DB");
+        let conn = PgConnection::establish(path).unwrap_or_else(|_| panic!("Error connecting to {}", path));
+
         Self { conn }
     }
 
@@ -38,7 +39,7 @@ impl DbConnection {
     }
 
     pub fn write_player_json<T: Serialize>(&mut self, itsf_id: i32, data: &T) {
-        let json_data = serde_json::to_vec(&data).expect("JSON serialization failed");
+        let json_data = serde_json::to_value(data).expect("JSON serialization failed");
         let player = DbPlayer { itsf_id, json_data };
 
         use crate::schema::players::dsl;
@@ -65,7 +66,7 @@ impl DbConnection {
             .optional();
 
         match expect_result(player) {
-            Some(player) => serde_json::from_slice(&player.json_data)
+            Some(player) => serde_json::from_value(player.json_data)
                 .map_err(|err| format!("JSON Error when loading player {}: {}", itsf_id, err)),
             None => Err(format!("No player data found for player {}", itsf_id)),
         }

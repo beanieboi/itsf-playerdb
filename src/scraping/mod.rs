@@ -177,14 +177,12 @@ async fn do_dtfb_rankings_download(
             player_futures.push(dtfb_players::DtfbPlayerInfo::download(dtfb_id));
         }
 
-        for dtfb_player in join_all(player_futures).await {
-            if let Ok(dtfb_player) = dtfb_player {
-                progress.log(format!(
-                    "[DTFB] .. downloaded player info for DTFB={}, ITSF={}",
-                    dtfb_player.dtfb_id, dtfb_player.itsf_id,
-                ));
-                dtfb_players.push(dtfb_player);
-            }
+        for dtfb_player in (join_all(player_futures).await).into_iter().flatten() {
+            progress.log(format!(
+                "[DTFB] .. downloaded player info for DTFB={}, ITSF={}",
+                dtfb_player.dtfb_id, dtfb_player.itsf_id,
+            ));
+            dtfb_players.push(dtfb_player);
         }
     }
 
