@@ -1,11 +1,8 @@
-use std::fs::File;
-use std::io::{Cursor, Read, Write};
 use std::{
     cell::RefCell,
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use zip::{CompressionMethod, ZipWriter};
 
 mod db;
 pub mod dtfb;
@@ -51,31 +48,12 @@ struct DatabaseInner {
 
 #[derive(Clone)]
 pub struct DatabaseRef {
-    database_path: String,
-    image_directory: String,
     inner: Arc<Mutex<DatabaseInner>>,
 }
 
-fn add_zip_file(
-    writer: &mut ZipWriter<Cursor<&mut Vec<u8>>>,
-    compression: CompressionMethod,
-    path: &str,
-) -> Result<(), ()> {
-    let mut f = File::open(path).map_err(|_| ())?;
-    let mut data = Vec::new();
-    f.read_to_end(&mut data).map_err(|_| ())?;
-
-    let options = zip::write::FileOptions::default().compression_method(compression);
-    // writer.start_file(path.split("/").last().unwrap(), options).map_err(|_| ())?;
-    writer.start_file(path, options).map_err(|_| ())?;
-    writer.write(&data).map_err(|_| ())?;
-
-    Ok(())
-}
-
 impl DatabaseRef {
-    pub fn load(path: &str, image_directory: &str) -> Self {
-        let mut db = db::DbConnection::open(path);
+    pub fn load(database_url: &str) -> Self {
+        let mut db: db::DbConnection = db::DbConnection::open(database_url);
         let mut players = HashMap::new();
 
         for player_id in db.get_player_ids() {
@@ -89,13 +67,8 @@ impl DatabaseRef {
             players,
         };
 
-        let path_info = std::fs::metadata(image_directory).unwrap_or_else(|_| panic!("Can't open {}", image_directory));
-        assert!(path_info.is_dir(), "Not a directory: {}", image_directory);
-
         Self {
             inner: Arc::new(Mutex::new(inner)),
-            image_directory: String::from(image_directory),
-            database_path: String::from(path),
         }
     }
 
@@ -116,17 +89,22 @@ impl DatabaseRef {
     }
 
     pub fn get_player_image(&self, itsf_id: i32) -> Option<PlayerImage> {
-        let path = format!("{}/{}.jpg", self.image_directory, itsf_id);
-        std::fs::read(path).ok().map(|image_data| PlayerImage {
-            itsf_id,
-            image_data,
-            image_format: String::from("jpg"),
-        })
+        let inner = self.inner.lock().unwrap();
+        let image = inner.db.borrow_mut().read_player_image(itsf_id);
+
+        match image {
+            Ok(image) => Some(image),
+            Err(_err) => None,
+        }
     }
 
     pub fn set_player_image(&self, player_image: PlayerImage) {
-        let path = format!("{}/{}.jpg", self.image_directory, player_image.itsf_id);
-        std::fs::write(&path, player_image.image_data).unwrap_or_else(|_| panic!("Failed to write {}", path));
+        let inner = self.inner.lock().unwrap();
+        inner.db.borrow_mut().write_player_image(
+            player_image.itsf_id,
+            player_image.image_data,
+            player_image.image_format,
+        );
     }
 
     fn modify_player<F>(&self, itsf_id: i32, f: F)
@@ -184,25 +162,5 @@ impl DatabaseRef {
             player.comments.push(PlayerComment { timestamp, text });
             player.comments.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         });
-    }
-
-    pub fn create_zip_file(&self) -> Result<Vec<u8>, ()> {
-        let mut buffer = Vec::new();
-        {
-            let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
-            add_zip_file(&mut zip, CompressionMethod::Deflated, &self.database_path)?;
-
-            let options = zip::write::FileOptions::default().compression_method(CompressionMethod::Stored);
-            zip.add_directory("images", options).map_err(|_| ())?;
-
-            let dir = std::fs::read_dir(&self.image_directory).map_err(|_| ())?;
-            for file in dir {
-                let file = file.map_err(|_| ())?.path();
-                let file = file.to_str().ok_or(())?;
-                add_zip_file(&mut zip, CompressionMethod::Deflated, file)?;
-            }
-        }
-
-        Ok(buffer)
     }
 }

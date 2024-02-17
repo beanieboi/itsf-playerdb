@@ -4,6 +4,7 @@ use diesel::{prelude::*, Insertable, Queryable};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::data::PlayerImage;
 use crate::schema::*;
 
 #[derive(Queryable, Insertable, AsChangeset)]
@@ -11,6 +12,14 @@ use crate::schema::*;
 struct DbPlayer {
     itsf_id: i32,
     json_data: serde_json::Value,
+}
+
+#[derive(Queryable, Insertable, AsChangeset)]
+#[diesel(table_name = player_images)]
+struct DbImage {
+    itsf_id: i32,
+    data: Vec<u8>,
+    format: String,
 }
 
 pub struct DbConnection {
@@ -28,6 +37,7 @@ impl DbConnection {
     pub fn open(database_url: &str) -> Self {
         let manager = ConnectionManager::<PgConnection>::new(database_url);
         let pool = Pool::builder()
+            .max_size(5)
             .test_on_check_out(true)
             .build(manager)
             .expect("Could not build connection pool");
@@ -75,6 +85,41 @@ impl DbConnection {
             Some(player) => serde_json::from_value(player.json_data)
                 .map_err(|err| format!("JSON Error when loading player {}: {}", itsf_id, err)),
             None => Err(format!("No player data found for player {}", itsf_id)),
+        }
+    }
+
+    pub fn write_player_image(&mut self, itsf_id: i32, data: Vec<u8>, format: String) {
+        let image = DbImage { itsf_id, data, format };
+        use crate::schema::player_images::dsl;
+        let conn = &mut self.pool.get().unwrap();
+
+        let result = diesel::insert_into(dsl::player_images)
+            .values(&image)
+            .on_conflict(dsl::itsf_id)
+            .do_update()
+            .set(&image)
+            .execute(conn);
+
+        let result = expect_result(result);
+        if result != 1 {
+            panic!("invalid query result for player insert: {}", result);
+        }
+    }
+
+    pub fn read_player_image(&mut self, itsf_id: i32) -> Result<PlayerImage, diesel::result::Error> {
+        use crate::schema::player_images::dsl;
+        let conn = &mut self.pool.get().unwrap();
+        let image = dsl::player_images
+            .filter(dsl::itsf_id.eq(itsf_id))
+            .first::<DbImage>(conn);
+
+        match image {
+            Ok(image) => Ok(PlayerImage {
+                itsf_id,
+                image_data: image.data,
+                image_format: image.format,
+            }),
+            Err(err) => Err(err),
         }
     }
 }

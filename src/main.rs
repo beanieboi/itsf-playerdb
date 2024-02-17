@@ -3,7 +3,6 @@
 extern crate diesel;
 
 use crate::data::{dtfb, itsf};
-use actix_web::http::header::ContentType;
 use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
@@ -36,14 +35,6 @@ impl AppState {
         this.download
             .lock()
             .map_err(|_| actix_web::error::ErrorInternalServerError("internal lock"))
-    }
-}
-
-#[actix_web::get("/db.zip")]
-async fn download_db_zip(data: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    match data.data.create_zip_file() {
-        Ok(data) => Ok(HttpResponse::Ok().content_type(ContentType::octet_stream()).body(data)),
-        Err(_) => Ok(HttpResponse::InternalServerError().json(json::err("error"))),
     }
 }
 
@@ -345,14 +336,14 @@ async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
     env_logger::init();
 
-    let database_path = std::env::var("DATABASE_URL").expect("DATABASE_URL missing from environment");
-    let images_path = std::env::var("IMAGE_PATH").expect("IMAGE_PATH missing from environment");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing from environment");
     let html_path = std::env::var("HTML_ROOT").expect("HTML_ROOT missing from environment");
-    let port = std::env::var("SERVER_PORT").expect("SERVER_PORT missing from environment");
-    let port = port.parse::<u16>().expect("invalid SERVER_PORT");
+    let port = std::env::var("PORT").expect("PORT missing from environment");
+    let port = port.parse::<u16>().expect("invalid PORT");
     let _password = std::env::var("PASSWORD").expect("PASSWORD missing from environment");
+
     let state = AppState {
-        data: data::DatabaseRef::load(&database_path, &images_path),
+        data: data::DatabaseRef::load(&database_url),
         download: Mutex::new(Weak::new()),
     };
     let state = web::Data::new(state);
@@ -361,7 +352,6 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(Logger::default())
             .app_data(state.clone())
-            .service(download_db_zip)
             .service(get_player)
             .service(get_player_image)
             .service(list_players)
