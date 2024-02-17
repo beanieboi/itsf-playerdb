@@ -5,11 +5,7 @@ use crate::data::{dtfb, itsf};
 use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
-use lazy_static::lazy_static;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Mutex, MutexGuard, Weak};
 
@@ -19,29 +15,10 @@ mod json;
 mod schema;
 mod scraping;
 
-fn load_users_file() -> HashMap<String, String> {
-    let path = std::env::var("USERS_FILE").expect("USERS_FILE missing from environment");
-    let file = File::open(path).expect("Failed to open users file");
-    let mut ret = HashMap::new();
-    for line in BufReader::new(file).lines() {
-        let line = line.expect("Failed to parse users file");
-        let parts: Vec<&str> = line.split(':').collect();
-        assert!(parts.len() == 2, "Invalid users file");
-        ret.insert(String::from(parts[0]), String::from(parts[1]));
-    }
-    ret
-}
-
 fn is_authorized(auth: BasicAuth) -> bool {
-    lazy_static! {
-        static ref USERS: HashMap<String, String> = load_users_file();
-    }
-    let user_id = auth.user_id().to_string();
-    let passwords = auth.password().zip(USERS.get(&user_id));
-    match passwords {
-        Some((pw1, pw2)) => pw1 == pw2,
-        None => false,
-    }
+    let env_password = std::env::var("PASSWORD").expect("PASSWORD missing from environment");
+    let user_password = auth.password().unwrap().to_string();
+    env_password == user_password
 }
 
 struct AppState {
@@ -335,6 +312,7 @@ async fn main() -> std::io::Result<()> {
         .or_else(|_| std::env::var("PORT"))
         .expect("SERVER_PORT or PORT missing from environment");
     let port = port.parse::<u16>().expect("invalid SERVER_PORT or PORT");
+    let _password = std::env::var("PASSWORD").expect("PASSWORD missing from environment");
     let state = AppState {
         data: data::DatabaseRef::load(&database_path),
         download: Mutex::new(Weak::new()),
