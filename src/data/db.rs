@@ -1,4 +1,5 @@
 use diesel::pg::PgConnection;
+use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{prelude::*, Insertable, Queryable};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -13,7 +14,7 @@ struct DbPlayer {
 }
 
 pub struct DbConnection {
-    conn: PgConnection,
+    pool: diesel::r2d2::Pool<ConnectionManager<PgConnection>>,
 }
 
 fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
@@ -24,17 +25,20 @@ fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
 }
 
 impl DbConnection {
-    pub fn open(path: &str) -> Self {
-        let conn = PgConnection::establish(path).unwrap_or_else(|_| panic!("Error connecting to {}", path));
+    pub fn open(database_url: &str) -> Self {
+        let manager = ConnectionManager::<PgConnection>::new(database_url);
+        let pool = Pool::builder()
+            .test_on_check_out(true)
+            .build(manager)
+            .expect("Could not build connection pool");
 
-        Self { conn }
+        Self { pool }
     }
 
     pub fn get_player_ids(&mut self) -> Vec<i32> {
         use crate::schema::players::dsl;
-
-        let ids = dsl::players.select(dsl::itsf_id).load(&mut self.conn);
-
+        let conn = &mut self.pool.get().unwrap();
+        let ids = dsl::players.select(dsl::itsf_id).load(conn);
         expect_result(ids)
     }
 
@@ -43,13 +47,14 @@ impl DbConnection {
         let player = DbPlayer { itsf_id, json_data };
 
         use crate::schema::players::dsl;
+        let conn = &mut self.pool.get().unwrap();
 
         let result = diesel::insert_into(dsl::players)
             .values(&player)
             .on_conflict(dsl::itsf_id)
             .do_update()
             .set(&player)
-            .execute(&mut self.conn);
+            .execute(conn);
 
         let result = expect_result(result);
         if result != 1 {
@@ -59,10 +64,11 @@ impl DbConnection {
 
     pub fn read_player_json<T: DeserializeOwned>(&mut self, itsf_id: i32) -> Result<T, String> {
         use crate::schema::players::dsl;
+        let conn = &mut self.pool.get().unwrap();
 
         let player = dsl::players
             .filter(dsl::itsf_id.eq(itsf_id))
-            .first::<DbPlayer>(&mut self.conn)
+            .first::<DbPlayer>(conn)
             .optional();
 
         match expect_result(player) {
