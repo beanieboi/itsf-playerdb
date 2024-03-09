@@ -28,9 +28,25 @@ pub async fn collect_dtfb_ids_from_rankings(ranking_id: i32, max_rank: usize) ->
     Ok(ret)
 }
 
+pub async fn ranking_id_for_season(season: i32) -> Result<i32, String> {
+    let url = "https://dtfb.de/wettbewerbe/turnierserie/rangliste";
+    let html = download::download(url, &[]).await?;
+    let html = Html::parse_document(&html);
+
+    for option in html.select(&Selector::parse("select option").unwrap()) {
+        if option.inner_html() == season.to_string() {
+            let value = option.value().attr("value").unwrap();
+            return Ok(value.to_string().parse::<i32>().unwrap())
+        }
+    }
+
+    Err("Season not found".to_string())
+}
+
 pub async fn collect_dtfb_rankings_for_season(season: i32) -> Result<Vec<i32>, String> {
     let url = "https://dtfb.de/wettbewerbe/turnierserie/rangliste";
-    let cookies = format!("sportsmanager_filter_saison_id={}", season);
+    let ranking_id = ranking_id_for_season(season).await?;
+    let cookies = format!("sportsmanager_filter_saison_id={}", ranking_id);
     let html = download::download(url, &[("Cookie", &cookies)]).await?;
     let html = Html::parse_document(&html);
 
