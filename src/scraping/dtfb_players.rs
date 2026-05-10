@@ -19,7 +19,7 @@ pub async fn collect_dtfb_ids_from_rankings(ranking_id: i32, max_rank: usize) ->
             if parts.len() == 2 && ret.len() <= max_rank {
                 match parts[1].parse::<i32>() {
                     Ok(id) => ret.push(id),
-                    Err(_) => log::error!("failed to parse DTFB player id: {}", href),
+                    Err(_) => log::warn!("failed to parse DTFB player id: {}", href),
                 }
             }
         }
@@ -58,7 +58,7 @@ pub async fn collect_dtfb_rankings_for_season(season: i32) -> Result<Vec<i32>, S
             if parts.len() == 2 {
                 match parts[1].parse::<i32>() {
                     Ok(id) => ret.push(id),
-                    Err(_) => log::error!("failed to parse DTFB rankings link: {}", href),
+                    Err(_) => log::warn!("failed to parse DTFB rankings link: {}", href),
                 }
             }
         }

@@ -59,7 +59,7 @@ impl DatabaseRef {
             let player = db.read_player_json(player_id).expect("failed to read player");
             players.insert(player_id, player);
         }
-        log::error!("Loaded {} players", players.len());
+        log::info!("Loaded {} players", players.len());
 
         let inner = DatabaseInner { db, players };
 

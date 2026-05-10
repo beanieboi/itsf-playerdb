@@ -34,7 +34,13 @@ impl BackgroundOperationProgress {
 
     pub fn log(&self, entry: String) {
         let mut inner = self.inner.lock().expect("failed to lock mutex");
-        log::error!("{}", entry);
+        log::info!("{}", entry);
+        inner.log.push(entry);
+    }
+
+    pub fn warn(&self, entry: String) {
+        let mut inner = self.inner.lock().expect("failed to lock mutex");
+        log::warn!("{}", entry);
         inner.log.push(entry);
     }
 
