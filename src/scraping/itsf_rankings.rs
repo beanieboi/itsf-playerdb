@@ -1,32 +1,90 @@
 use super::download;
 use crate::data::itsf::*;
-use scraper::{ElementRef, Selector};
+use serde::{Deserialize, Serialize};
 
-fn get_player_from_div(div: &ElementRef) -> Result<(i32, i32), &'static str> {
-    let id = div.value().attr("id").ok_or("no id attr")?;
-    let onclick = div.value().attr("onclick").ok_or("no onclick attr")?;
+const WORLD_TOUR_ID: i32 = 1;
+const OFFICIAL_RULE_ID: i32 = 1;
 
-    let place = if let Some(striped_place) = id.strip_prefix("place") {
-        striped_place.parse::<i32>().map_err(|_| "can't parse place attr")?
-    } else {
-        Err("id attr has no place")?
-    };
+#[derive(Debug, Clone)]
+pub struct RankingPlacement {
+    pub place: i32,
+    pub player_code: String,
+}
 
-    let license = if onclick.contains("&numlic=") {
-        let mut parts = onclick.split("&numlic=");
-        parts.next().ok_or("onclick doesn't contain player link")?;
-        let license = parts.next().ok_or("onclick doesn't contain player link")?;
-        license
-            .split('&')
-            .next()
-            .ok_or("doesn't contain player link")?
-            .parse::<i32>()
-            .map_err(|_| "can't parse player license")?
-    } else {
-        Err("onclick doesn't contain player link")?
-    };
+#[derive(Serialize)]
+struct RankingsRequest {
+    tour: i32,
+    fallback: &'static str,
+    rule: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    season: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<usize>,
+}
 
-    Ok((place, license))
+#[derive(Deserialize)]
+struct RankingsResponse {
+    pages: usize,
+    standings: Vec<Standing>,
+    seasons: Vec<Season>,
+    rules: Vec<Rule>,
+}
+
+#[derive(Deserialize)]
+struct Standing {
+    rank: i32,
+    team: Vec<StandingPlayer>,
+}
+
+#[derive(Deserialize)]
+struct StandingPlayer {
+    code: String,
+}
+
+#[derive(Deserialize)]
+struct Season {
+    id: i32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct Rule {
+    id: i32,
+    categories: Vec<Category>,
+}
+
+#[derive(Deserialize)]
+struct Category {
+    id: i32,
+    name: String,
+}
+
+async fn request_rankings(request: &RankingsRequest) -> Result<RankingsResponse, String> {
+    download::post_json(
+        "https://api.tablesoccer.org/cms.rankings",
+        &[("X-Organization", "ITSF")],
+        request,
+    )
+    .await
+}
+
+fn category_name(category: RankingCategory, class: RankingClass) -> &'static str {
+    match (category, class) {
+        (RankingCategory::Open, RankingClass::Singles) => "Open Singles",
+        (RankingCategory::Open, RankingClass::Doubles) => "Open Doubles",
+        (RankingCategory::Open, RankingClass::Combined) => "Open Combined",
+        (RankingCategory::Women, RankingClass::Singles) => "Women Singles",
+        (RankingCategory::Women, RankingClass::Doubles) => "Women Doubles",
+        (RankingCategory::Women, RankingClass::Combined) => "Women Combined",
+        (RankingCategory::Junior, RankingClass::Singles) => "Junior Under 19 Singles",
+        (RankingCategory::Junior, RankingClass::Doubles) => "Junior Under 19 Doubles",
+        (RankingCategory::Junior, RankingClass::Combined) => "Junior Under 19 Combined",
+        (RankingCategory::Senior, RankingClass::Singles) => "Senior Over 50 Singles",
+        (RankingCategory::Senior, RankingClass::Doubles) => "Senior Over 50 Doubles",
+        (RankingCategory::Senior, RankingClass::Combined) => "Senior Over 50 Combined",
+    }
 }
 
 pub async fn download(
@@ -34,29 +92,57 @@ pub async fn download(
     category: RankingCategory,
     class: RankingClass,
     count: usize,
-) -> Result<Vec<(i32, i32)>, String> {
-    let category = match category {
-        RankingCategory::Open => "o",
-        RankingCategory::Women => "w",
-        RankingCategory::Junior => "j",
-        RankingCategory::Senior => "s",
-    };
-    let class = match class {
-        RankingClass::Singles => "s",
-        RankingClass::Doubles => "d",
-        RankingClass::Combined => "c",
-    };
-    let url = format!("https://www.tablesoccer.org/page/rankings?category={}{}&system=1&Ranking+Rules=Select+Category&tour={}&vues={}", category, class, year, count);
-    let itsf = download::download_html(&url).await?;
+) -> Result<Vec<RankingPlacement>, String> {
+    let initial = request_rankings(&RankingsRequest {
+        tour: WORLD_TOUR_ID,
+        fallback: "player",
+        rule: OFFICIAL_RULE_ID,
+        season: None,
+        category: None,
+        page: None,
+    })
+    .await?;
+    let season = initial
+        .seasons
+        .iter()
+        .find(|season| season.name == year.to_string())
+        .ok_or(format!("can't find ITSF season {}", year))?;
+    let category_name = category_name(category, class);
+    let category = initial
+        .rules
+        .iter()
+        .find(|rule| rule.id == OFFICIAL_RULE_ID)
+        .and_then(|rule| rule.categories.iter().find(|category| category.name == category_name))
+        .ok_or(format!("can't find ITSF ranking category {}", category_name))?;
 
     let mut ret = Vec::new();
+    let mut page = 1;
+    loop {
+        let rankings = request_rankings(&RankingsRequest {
+            tour: WORLD_TOUR_ID,
+            fallback: "player",
+            rule: OFFICIAL_RULE_ID,
+            season: Some(season.id),
+            category: Some(category.id),
+            page: Some(page),
+        })
+        .await?;
 
-    let div_selector = Selector::parse("div").unwrap();
-    for div in itsf.select(&div_selector) {
-        if let Ok(placement) = get_player_from_div(&div) {
-            ret.push(placement);
+        for standing in rankings.standings {
+            if standing.rank as usize > count {
+                return Ok(ret);
+            }
+            for player in standing.team {
+                ret.push(RankingPlacement {
+                    place: standing.rank,
+                    player_code: player.code,
+                });
+            }
         }
-    }
 
-    Ok(ret)
+        if page >= rankings.pages {
+            return Ok(ret);
+        }
+        page += 1;
+    }
 }

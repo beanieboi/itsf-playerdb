@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, Weak},
 };
 
@@ -17,20 +17,27 @@ mod players;
 
 async fn download_itsf_players(
     db: &DatabaseRef,
-    player_itsf_ids: &[i32],
+    player_refs: &[players::PlayerRef],
     progress: Arc<BackgroundOperationProgress>,
     force: bool,
-) -> Result<(), String> {
-    let mut missing_players: Vec<i32>;
+) -> Result<HashMap<String, i32>, String> {
+    let mut player_ids = HashMap::new();
+    let mut missing_players: Vec<players::PlayerRef>;
 
     if force {
-        missing_players = player_itsf_ids.to_vec();
+        missing_players = player_refs.to_vec();
     } else {
-        missing_players = player_itsf_ids
+        missing_players = player_refs
             .iter()
-            .filter_map(|itsf_lic| match db.get_player(*itsf_lic) {
-                None => Some(*itsf_lic),
-                Some(_) => None,
+            .filter_map(|player_ref| match player_ref {
+                players::PlayerRef::Code(_) => Some(player_ref.clone()),
+                players::PlayerRef::License(itsf_lic) => match db.get_player(*itsf_lic) {
+                    None => Some(player_ref.clone()),
+                    Some(_) => {
+                        player_ids.insert(player_ref.key(), *itsf_lic);
+                        None
+                    }
+                },
             })
             .collect();
     }
@@ -45,32 +52,43 @@ async fn download_itsf_players(
         const MAX_CONCURRENT: usize = 5;
         while !missing_players.is_empty() {
             let mut player_futures = Vec::new();
-            let mut image_futures = Vec::new();
             let count = missing_players.len().min(MAX_CONCURRENT);
             for _ in 0..count {
-                let itsf_id = missing_players.pop().unwrap();
-                player_futures.push(players::download_player_info(itsf_id));
-                image_futures.push(players::download_player_image(itsf_id));
+                let player_ref = missing_players.pop().unwrap();
+                player_futures.push(async move {
+                    let player = match &player_ref {
+                        players::PlayerRef::Code(code) => players::download_player_info_by_code(code).await,
+                        players::PlayerRef::License(itsf_id) => players::download_player_info(*itsf_id).await,
+                    };
+                    player.map(|player| (player_ref, player))
+                });
             }
 
             for player in join_all(player_futures).await {
                 match player {
-                    Ok(player) => {
+                    Ok((player_ref, player)) => {
                         progress.log(format!(
                             "[ITSF] .. downloaded player info for ID={}: {} {} ({:?}, {:?})",
                             player.itsf_id, player.first_name, player.last_name, player.category, player.country_code
                         ));
+                        let player_id = player.itsf_id;
+                        let image = match &player_ref {
+                            players::PlayerRef::Code(code) => {
+                                players::download_player_image_by_code(code, player_id).await
+                            }
+                            players::PlayerRef::License(itsf_id) => players::download_player_image(*itsf_id).await,
+                        };
                         db.add_player(player);
+                        player_ids.insert(player_ref.key(), player_id);
+                        match image {
+                            Ok(Some(image)) => db.set_player_image(image),
+                            Ok(None) => {}
+                            Err(err) => progress.warn(format!("[ITSF] Failed to download player image: {}", err)),
+                        }
                     }
                     Err(err) => {
-                        progress.log(format!("[ITSF] Failed to download player: {}", err));
+                        progress.warn(format!("[ITSF] Failed to download player: {}", err));
                     }
-                }
-            }
-
-            for image in join_all(image_futures).await {
-                if let Some(image) = image? {
-                    db.set_player_image(image);
                 }
             }
         }
@@ -78,7 +96,7 @@ async fn download_itsf_players(
         progress.log("[ITSF] Done".to_string());
     }
 
-    Ok(())
+    Ok(player_ids)
 }
 
 async fn do_itsf_rankings_downloads(
@@ -99,19 +117,29 @@ async fn do_itsf_rankings_downloads(
                 ));
                 let rankings = itsf_rankings::download(year, category, class, max_rank).await?;
 
-                let itsf_player_ids: Vec<i32> = rankings.iter().map(|entry| entry.1).collect();
-                download_itsf_players(db, &itsf_player_ids, progress.clone(), force).await?;
+                let itsf_player_refs: Vec<players::PlayerRef> = rankings
+                    .iter()
+                    .map(|entry| players::PlayerRef::Code(entry.player_code.clone()))
+                    .collect();
+                let player_ids = download_itsf_players(db, &itsf_player_refs, progress.clone(), force).await?;
 
                 for placement in rankings {
-                    db.add_player_itsf_ranking(
-                        placement.1,
-                        itsf::Ranking {
-                            year,
-                            category,
-                            class,
-                            place: placement.0,
-                        },
-                    );
+                    if let Some(player_id) = player_ids.get(&placement.player_code) {
+                        db.add_player_itsf_ranking(
+                            *player_id,
+                            itsf::Ranking {
+                                year,
+                                category,
+                                class,
+                                place: placement.place,
+                            },
+                        );
+                    } else {
+                        progress.warn(format!(
+                            "[ITSF] Skipping ranking for unresolved player code {}",
+                            placement.player_code
+                        ));
+                    }
                 }
             }
         }
@@ -138,6 +166,88 @@ pub fn start_itsf_rankings_download(
     weak
 }
 
+fn add_dtfb_player_data(db: &DatabaseRef, dtfb_player: dtfb_players::DtfbPlayerInfo) {
+    db.set_player_dtfb_id(dtfb_player.itsf_id, dtfb_player.dtfb_id);
+
+    for result in dtfb_player.championship_results {
+        db.add_player_dtfb_championship_result(
+            dtfb_player.itsf_id,
+            dtfb::NationalChampionshipResult {
+                year: result.year,
+                place: result.place,
+                category: result.category,
+                class: result.class,
+            },
+        );
+    }
+
+    for ranking in dtfb_player.national_rankings {
+        db.add_player_dtfb_ranking(
+            dtfb_player.itsf_id,
+            dtfb::NationalRanking {
+                year: ranking.year,
+                place: ranking.place,
+                category: ranking.category,
+            },
+        );
+    }
+
+    for team in dtfb_player.teams {
+        db.add_player_dtfb_team(dtfb_player.itsf_id, team.0, team.1);
+    }
+}
+
+async fn download_and_store_dtfb_players(
+    db: &DatabaseRef,
+    mut dtfb_player_ids: Vec<i32>,
+    progress: Arc<BackgroundOperationProgress>,
+    force: bool,
+) -> Result<(), String> {
+    if dtfb_player_ids.is_empty() {
+        return Ok(());
+    }
+
+    progress.log(format!("[DTFB] Downloading {} players", dtfb_player_ids.len()));
+
+    const MAX_CONCURRENT: usize = 5;
+    while !dtfb_player_ids.is_empty() {
+        let mut player_futures = Vec::new();
+        let count = dtfb_player_ids.len().min(MAX_CONCURRENT);
+        for _ in 0..count {
+            let dtfb_id = dtfb_player_ids.pop().unwrap();
+            player_futures.push(dtfb_players::DtfbPlayerInfo::download(dtfb_id));
+        }
+
+        let mut downloaded_players = Vec::new();
+        for dtfb_player in join_all(player_futures).await {
+            match dtfb_player {
+                Ok(dtfb_player) => {
+                    progress.log(format!(
+                        "[DTFB] .. downloaded player info for DTFB={}, ITSF={}",
+                        dtfb_player.dtfb_id, dtfb_player.itsf_id,
+                    ));
+                    downloaded_players.push(dtfb_player);
+                }
+                Err(err) => {
+                    progress.warn(format!("[DTFB] Failed to download player: {}", err));
+                }
+            }
+        }
+
+        let itsf_player_refs: Vec<players::PlayerRef> = downloaded_players
+            .iter()
+            .map(|player| players::PlayerRef::License(player.itsf_id))
+            .collect();
+        download_itsf_players(db, &itsf_player_refs, progress.clone(), force).await?;
+
+        for dtfb_player in downloaded_players {
+            add_dtfb_player_data(db, dtfb_player);
+        }
+    }
+
+    Ok(())
+}
+
 async fn do_dtfb_rankings_download(
     db: DatabaseRef,
     seasons: Vec<i32>,
@@ -150,74 +260,18 @@ async fn do_dtfb_rankings_download(
         seasons
     ));
 
-    let mut dtfb_player_ids = HashSet::new();
+    let mut downloaded_dtfb_player_ids = HashSet::new();
 
     for season in seasons {
         let ranking_ids = dtfb_players::collect_dtfb_rankings_for_season(season).await?;
         for ranking_id in ranking_ids {
-            let rankings = dtfb_players::collect_dtfb_ids_from_rankings(ranking_id, max_rank).await?;
-            for id in rankings {
-                dtfb_player_ids.insert(id);
-            }
-        }
-    }
+            let dtfb_player_ids = dtfb_players::collect_dtfb_ids_from_rankings(ranking_id, max_rank).await?;
+            let missing_player_ids = dtfb_player_ids
+                .into_iter()
+                .filter(|dtfb_id| downloaded_dtfb_player_ids.insert(*dtfb_id))
+                .collect();
 
-    progress.log(format!("[DTFB] Downloading {} players", dtfb_player_ids.len()));
-
-    let mut dtfb_player_ids: Vec<i32> = dtfb_player_ids.into_iter().collect();
-    let mut dtfb_players = Vec::new();
-
-    // download DTFB player profiles for every single player
-    const MAX_CONCURRENT: usize = 5;
-    while !dtfb_player_ids.is_empty() {
-        let mut player_futures = Vec::new();
-        let count = dtfb_player_ids.len().min(MAX_CONCURRENT);
-        for _ in 0..count {
-            let dtfb_id = dtfb_player_ids.pop().unwrap();
-            player_futures.push(dtfb_players::DtfbPlayerInfo::download(dtfb_id));
-        }
-
-        for dtfb_player in join_all(player_futures).await.into_iter().flatten() {
-            progress.log(format!(
-                "[DTFB] .. downloaded player info for DTFB={}, ITSF={}",
-                dtfb_player.dtfb_id, dtfb_player.itsf_id,
-            ));
-            dtfb_players.push(dtfb_player);
-        }
-    }
-
-    let itsf_player_ids: Vec<i32> = dtfb_players.iter().map(|player| player.itsf_id).collect();
-    download_itsf_players(&db, &itsf_player_ids, progress.clone(), force).await?;
-
-    // add DTFB player data to DB
-    for dtfb_player in dtfb_players {
-        db.set_player_dtfb_id(dtfb_player.itsf_id, dtfb_player.dtfb_id);
-
-        for result in dtfb_player.championship_results {
-            db.add_player_dtfb_championship_result(
-                dtfb_player.itsf_id,
-                dtfb::NationalChampionshipResult {
-                    year: result.year,
-                    place: result.place,
-                    category: result.category,
-                    class: result.class,
-                },
-            );
-        }
-
-        for ranking in dtfb_player.national_rankings {
-            db.add_player_dtfb_ranking(
-                dtfb_player.itsf_id,
-                dtfb::NationalRanking {
-                    year: ranking.year,
-                    place: ranking.place,
-                    category: ranking.category,
-                },
-            );
-        }
-
-        for team in dtfb_player.teams {
-            db.add_player_dtfb_team(dtfb_player.itsf_id, team.0, team.1.clone());
+            download_and_store_dtfb_players(&db, missing_player_ids, progress.clone(), force).await?;
         }
     }
 
