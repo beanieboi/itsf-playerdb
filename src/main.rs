@@ -7,7 +7,6 @@ use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
 use lazy_static::lazy_static;
-use rustls::ServerConfig;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -327,39 +326,6 @@ async fn add_player_comment(
     Ok(HttpResponse::Ok().json(json::ok("added comment")))
 }
 
-fn get_rustls_config() -> Option<ServerConfig> {
-    use rustls::{Certificate, PrivateKey};
-    use rustls_pemfile::{read_all, Item};
-
-    std::env::var("CERT_PEM").ok().map(|pem| {
-        let pem = File::open(pem).expect("PEM file not found");
-        let mut pem = BufReader::new(pem);
-        let pem_sections = read_all(&mut pem).expect("Failed to parse PEM file");
-
-        let certs: Vec<Certificate> = pem_sections
-            .iter()
-            .filter_map(|item| match item {
-                Item::X509Certificate(cert) => Some(Certificate(cert.clone())),
-                _ => None,
-            })
-            .collect();
-        let key = pem_sections
-            .iter()
-            .filter_map(|item| match item {
-                Item::RSAKey(key) => Some(PrivateKey(key.clone())),
-                _ => None,
-            })
-            .next()
-            .expect("no RSA key in PEM file");
-
-        ServerConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .expect("Failed to initialize rustls")
-    })
-}
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
@@ -376,7 +342,7 @@ async fn main() -> std::io::Result<()> {
     };
     let state = web::Data::new(state);
 
-    let mut server = HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .app_data(state.clone())
@@ -393,15 +359,6 @@ async fn main() -> std::io::Result<()> {
             .service(actix_files::Files::new("", &html_path).index_file("start.html"))
     });
 
-    if let Some(server_config) = get_rustls_config() {
-        log::info!("Starting HTTPS server at http://localhost:{}", port);
-        server = server
-            .bind_rustls(("0.0.0.0", port), server_config)
-            .expect("Failed to start actix with rustls");
-    } else {
-        log::info!("Starting HTTP server at http://localhost:{}", port);
-        server = server.bind(("0.0.0.0", port))?;
-    }
-
-    server.run().await
+    log::info!("Starting HTTP server at http://localhost:{}", port);
+    server.bind(("0.0.0.0", port))?.run().await
 }
