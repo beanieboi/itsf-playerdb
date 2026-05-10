@@ -4,6 +4,7 @@ use diesel::{prelude::*, Insertable, Queryable};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::data::PlayerImage;
 use crate::schema::*;
 
 #[derive(Queryable, Insertable, AsChangeset)]
@@ -11,6 +12,14 @@ use crate::schema::*;
 struct DbPlayer {
     itsf_id: i32,
     json_data: Vec<u8>,
+}
+
+#[derive(Queryable, Insertable, AsChangeset)]
+#[diesel(table_name = player_images)]
+struct DbPlayerImage {
+    itsf_id: i32,
+    image_data: Vec<u8>,
+    image_format: String,
 }
 
 pub struct DbConnection {
@@ -78,5 +87,44 @@ impl DbConnection {
                 .map_err(|err| format!("JSON Error when loading player {}: {}", itsf_id, err)),
             None => Err(format!("No player data found for player {}", itsf_id)),
         }
+    }
+
+    pub fn write_player_image(&self, player_image: PlayerImage) {
+        let db_image = DbPlayerImage {
+            itsf_id: player_image.itsf_id,
+            image_data: player_image.image_data,
+            image_format: player_image.image_format,
+        };
+
+        use crate::schema::player_images::dsl;
+
+        let conn = &mut self.pool.get().expect("Failed to get DB connection");
+        let result = diesel::insert_into(dsl::player_images)
+            .values(&db_image)
+            .on_conflict(dsl::itsf_id)
+            .do_update()
+            .set(&db_image)
+            .execute(conn);
+
+        let result = expect_result(result);
+        if result != 1 {
+            panic!("invalid query result for player image insert: {}", result);
+        }
+    }
+
+    pub fn read_player_image(&self, itsf_id: i32) -> Option<PlayerImage> {
+        use crate::schema::player_images::dsl;
+
+        let conn = &mut self.pool.get().expect("Failed to get DB connection");
+        let image = dsl::player_images
+            .filter(dsl::itsf_id.eq(itsf_id))
+            .first::<DbPlayerImage>(conn)
+            .optional();
+
+        expect_result(image).map(|image| PlayerImage {
+            itsf_id: image.itsf_id,
+            image_data: image.image_data,
+            image_format: image.image_format,
+        })
     }
 }

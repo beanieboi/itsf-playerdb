@@ -134,9 +134,15 @@ async fn get_player_image(data: web::Data<AppState>, itsf_lic: web::Path<i32>) -
     let itsf_lic = itsf_lic.into_inner();
 
     match data.data.get_player_image(itsf_lic) {
-        Some(player_image) => Ok(HttpResponse::Ok()
-            .append_header(("Content-Type", "image/jpeg"))
-            .body(player_image.image_data)),
+        Some(player_image) => {
+            let content_type = match player_image.image_format.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                _ => "application/octet-stream",
+            };
+            Ok(HttpResponse::Ok()
+                .append_header(("Content-Type", content_type))
+                .body(player_image.image_data))
+        }
         None => Ok(HttpResponse::NotFound().finish()),
     }
 }
@@ -323,12 +329,11 @@ async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     let database_path = std::env::var("DATABASE_URL").expect("DATABASE_URL missing from environment");
-    let images_path = std::env::var("IMAGE_PATH").expect("IMAGE_PATH missing from environment");
     let html_path = std::env::var("HTML_ROOT").expect("HTML_ROOT missing from environment");
     let port = std::env::var("SERVER_PORT").expect("SERVER_PORT missing from environment");
     let port = port.parse::<u16>().expect("invalid SERVER_PORT");
     let state = AppState {
-        data: data::DatabaseRef::load(&database_path, &images_path),
+        data: data::DatabaseRef::load(&database_path),
         download: Mutex::new(Weak::new()),
     };
     let state = web::Data::new(state);
