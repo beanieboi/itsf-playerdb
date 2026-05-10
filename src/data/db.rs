@@ -21,8 +21,8 @@ struct DbPlayer {
 #[diesel(table_name = player_images)]
 struct DbPlayerImage {
     itsf_id: i32,
-    image_data: Vec<u8>,
-    image_format: String,
+    data: Vec<u8>,
+    format: String,
 }
 
 pub struct DbConnection {
@@ -99,8 +99,8 @@ impl DbConnection {
     pub fn write_player_image(&self, player_image: PlayerImage) {
         let db_image = DbPlayerImage {
             itsf_id: player_image.itsf_id,
-            image_data: player_image.image_data,
-            image_format: player_image.image_format,
+            data: player_image.image_data,
+            format: player_image.image_format,
         };
 
         use crate::schema::player_images::dsl;
@@ -130,8 +130,8 @@ impl DbConnection {
 
         expect_result(image).map(|image| PlayerImage {
             itsf_id: image.itsf_id,
-            image_data: image.image_data,
-            image_format: image.image_format,
+            image_data: image.data,
+            image_format: image.format,
         })
     }
 }

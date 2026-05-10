@@ -3,8 +3,8 @@
 diesel::table! {
     player_images (itsf_id) {
         itsf_id -> Integer,
-        image_data -> Binary,
-        image_format -> Text,
+        data -> Binary,
+        format -> Text,
     }
 }
 
