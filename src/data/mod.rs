@@ -1,11 +1,8 @@
-use std::fs::File;
-use std::io::{Cursor, Read, Write};
 use std::{
     cell::RefCell,
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use zip::{CompressionMethod, ZipWriter};
 
 mod db;
 pub mod dtfb;
@@ -51,26 +48,8 @@ struct DatabaseInner {
 
 #[derive(Clone)]
 pub struct DatabaseRef {
-    database_path: String,
     image_directory: String,
     inner: Arc<Mutex<DatabaseInner>>,
-}
-
-fn add_zip_file(
-    writer: &mut ZipWriter<Cursor<&mut Vec<u8>>>,
-    compression: CompressionMethod,
-    path: &str,
-) -> Result<(), ()> {
-    let mut f = File::open(path).map_err(|_| ())?;
-    let mut data = Vec::new();
-    f.read_to_end(&mut data).map_err(|_| ())?;
-
-    let options = zip::write::FileOptions::default().compression_method(compression);
-    // writer.start_file(path.split("/").last().unwrap(), options).map_err(|_| ())?;
-    writer.start_file(path, options).map_err(|_| ())?;
-    writer.write(&data).map_err(|_| ())?;
-
-    Ok(())
 }
 
 impl DatabaseRef {
@@ -95,7 +74,6 @@ impl DatabaseRef {
         Self {
             inner: Arc::new(Mutex::new(inner)),
             image_directory: String::from(image_directory),
-            database_path: String::from(path),
         }
     }
 
@@ -186,23 +164,4 @@ impl DatabaseRef {
         });
     }
 
-    pub fn create_zip_file(&self) -> Result<Vec<u8>, ()> {
-        let mut buffer = Vec::new();
-        {
-            let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
-            add_zip_file(&mut zip, CompressionMethod::Deflated, &self.database_path)?;
-
-            let options = zip::write::FileOptions::default().compression_method(CompressionMethod::Stored);
-            zip.add_directory("images", options).map_err(|_| ())?;
-
-            let dir = std::fs::read_dir(&self.image_directory).map_err(|_| ())?;
-            for file in dir {
-                let file = file.map_err(|_| ())?.path();
-                let file = file.to_str().ok_or(())?;
-                add_zip_file(&mut zip, CompressionMethod::Deflated, file)?;
-            }
-        }
-
-        Ok(buffer)
-    }
 }

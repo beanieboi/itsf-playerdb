@@ -2,7 +2,6 @@
 extern crate diesel;
 
 use crate::data::{dtfb, itsf};
-use actix_web::http::header::ContentType;
 use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
@@ -55,14 +54,6 @@ impl AppState {
         this.download
             .lock()
             .map_err(|_| actix_web::error::ErrorInternalServerError("internal lock"))
-    }
-}
-
-#[actix_web::get("/db.zip")]
-async fn download_db_zip(data: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    match data.data.create_zip_file() {
-        Ok(data) => Ok(HttpResponse::Ok().content_type(ContentType::octet_stream()).body(data)),
-        Err(_) => Ok(HttpResponse::InternalServerError().json(json::err("error"))),
     }
 }
 
@@ -346,7 +337,6 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(Logger::default())
             .app_data(state.clone())
-            .service(download_db_zip)
             .service(get_player)
             .service(get_player_image)
             .service(list_players)
