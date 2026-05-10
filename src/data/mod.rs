@@ -145,9 +145,9 @@ impl DatabaseRef {
 
     pub fn add_player_comment(&self, itsf_id: i32, text: String) {
         self.modify_player(itsf_id, |player| {
-            let timestamp = chrono::Utc::now().naive_local().timestamp() as u32;
+            let timestamp = chrono::Utc::now().timestamp() as u32;
             player.comments.push(PlayerComment { timestamp, text });
-            player.comments.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            player.comments.sort_by_key(|comment| comment.timestamp);
         });
     }
 }

@@ -91,11 +91,11 @@ fn parse_player_info_from(itsf_id: i32, html: &Html) -> Result<Player, String> {
 
     Ok(Player {
         itsf_id,
-        first_name: first_name,
-        last_name: last_name,
+        first_name,
+        last_name,
         birth_year,
         country_code: Some(country_code.into()),
-        category: category,
+        category,
         itsf_rankings: Vec::new(),
         dtfb_id: None,
         dtfb_championship_results: Vec::new(),

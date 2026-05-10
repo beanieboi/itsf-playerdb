@@ -1,11 +1,9 @@
-#[macro_use]
-extern crate diesel;
-
 use crate::data::{dtfb, itsf};
 use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
 use serde::Deserialize;
+use std::cmp::Reverse;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Mutex, MutexGuard, Weak};
 
@@ -28,7 +26,7 @@ struct AppState {
 impl AppState {
     fn get_download(
         this: &web::Data<AppState>,
-    ) -> Result<MutexGuard<Weak<background::BackgroundOperationProgress>>, Error> {
+    ) -> Result<MutexGuard<'_, Weak<background::BackgroundOperationProgress>>, Error> {
         this.download
             .lock()
             .map_err(|_| actix_web::error::ErrorInternalServerError("internal lock"))
@@ -71,10 +69,10 @@ async fn get_player(data: web::Data<AppState>, itsf_lic: web::Path<i32>) -> Resu
             player
                 .itsf_rankings
                 .retain(|ranking| ranking.class != itsf::RankingClass::Combined);
-            player.itsf_rankings.sort_by(|a, b| b.year.cmp(&a.year));
-            player.dtfb_rankings.sort_by(|a, b| b.year.cmp(&a.year));
-            player.dm_placements.sort_by(|a, b| b.year.cmp(&a.year));
-            player.dtfl_teams.sort_by(|a, b| b.year.cmp(&a.year));
+            player.itsf_rankings.sort_by_key(|ranking| Reverse(ranking.year));
+            player.dtfb_rankings.sort_by_key(|ranking| Reverse(ranking.year));
+            player.dm_placements.sort_by_key(|placement| Reverse(placement.year));
+            player.dtfl_teams.sort_by_key(|team| Reverse(team.year));
 
             Ok(HttpResponse::Ok().json(json::ok(player)))
         }
@@ -128,6 +126,10 @@ async fn get_player_image(data: web::Data<AppState>, itsf_lic: web::Path<i32>) -
 #[derive(serde::Serialize)]
 struct DownloadStatus {
     running: bool,
+    title: Option<String>,
+    progress: Option<usize>,
+    max: Option<usize>,
+    finished: bool,
     log: Vec<String>,
 }
 
@@ -135,12 +137,23 @@ struct DownloadStatus {
 async fn download_status(data: web::Data<AppState>) -> Result<HttpResponse, Error> {
     let download = AppState::get_download(&data)?;
     let status = match download.upgrade() {
-        Some(download) => DownloadStatus {
-            running: true,
-            log: download.get_log(),
-        },
+        Some(download) => {
+            let (progress, max) = download.get_progress();
+            DownloadStatus {
+                running: true,
+                title: Some(download.get_title().to_owned()),
+                progress: Some(progress),
+                max: Some(max),
+                finished: download.has_finished(),
+                log: download.get_log(),
+            }
+        }
         None => DownloadStatus {
             running: false,
+            title: None,
+            progress: None,
+            max: None,
+            finished: true,
             log: Vec::new(),
         },
     };
