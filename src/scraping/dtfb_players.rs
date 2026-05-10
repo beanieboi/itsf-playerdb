@@ -4,12 +4,15 @@ use crate::data::dtfb::*;
 
 use super::download;
 
+const DTFB_HEADERS: &[(&str, &str)] = &[("User-Agent", "Mozilla/5.0")];
+
 pub async fn collect_dtfb_ids_from_rankings(ranking_id: i32, max_rank: usize) -> Result<Vec<i32>, String> {
     let url = format!(
         "https://dtfb.de/wettbewerbe/turnierserie/rangliste?task=rangliste&id={}",
         ranking_id
     );
-    let html = download::download_html(&url).await?;
+    let html = download::download(&url, DTFB_HEADERS).await?;
+    let html = Html::parse_document(&html);
 
     let mut ret = Vec::new();
 
@@ -30,7 +33,7 @@ pub async fn collect_dtfb_ids_from_rankings(ranking_id: i32, max_rank: usize) ->
 
 pub async fn ranking_id_for_season(season: i32) -> Result<i32, String> {
     let url = "https://dtfb.de/wettbewerbe/turnierserie/rangliste";
-    let html = download::download(url, &[]).await?;
+    let html = download::download(url, DTFB_HEADERS).await?;
     let html = Html::parse_document(&html);
 
     for option in html.select(&Selector::parse("select option").unwrap()) {
@@ -47,7 +50,8 @@ pub async fn collect_dtfb_rankings_for_season(season: i32) -> Result<Vec<i32>, S
     let url = "https://dtfb.de/wettbewerbe/turnierserie/rangliste";
     let ranking_id = ranking_id_for_season(season).await?;
     let cookies = format!("sportsmanager_filter_saison_id={}", ranking_id);
-    let html = download::download(url, &[("Cookie", &cookies)]).await?;
+    let headers = [DTFB_HEADERS[0], ("Cookie", cookies.as_str())];
+    let html = download::download(url, &headers).await?;
     let html = Html::parse_document(&html);
 
     let mut ret = Vec::new();
@@ -70,6 +74,8 @@ pub async fn collect_dtfb_rankings_for_season(season: i32) -> Result<Vec<i32>, S
 pub struct DtfbPlayerInfo {
     pub dtfb_id: i32,
     pub itsf_id: i32,
+    pub first_name: String,
+    pub last_name: String,
     pub championship_results: Vec<NationalChampionshipResult>,
     pub national_rankings: Vec<NationalRanking>,
     pub teams: Vec<(i32, String)>,
@@ -104,13 +110,15 @@ impl DtfbPlayerInfo {
             "https://dtfb.de/component/sportsmanager?task=spieler_details&id={}&format=json",
             dtfb_id
         );
-        let json = download::download(&url, &[]).await?;
+        let json = download::download(&url, DTFB_HEADERS).await?;
         let json: serde_json::Value = serde_json::from_str(&json).map_err(|err| err.to_string())?;
 
         let data = value(&json, "data")?;
         let spieler = value(data, "spieler")?;
         let spieler_id = int(spieler, "spieler_id")?;
         let lizenznr = int(spieler, "lizenznr")?;
+        let first_name = string(spieler, "vorname")?;
+        let last_name = string(spieler, "nachname")?;
         let teams = array(data, "teams")?;
         let turnier_platzierungen = array(data, "turnier_platzierungen")?;
         let ranglisten_platzierungen = array(data, "ranglisten_platzierungen")?;
@@ -190,6 +198,8 @@ impl DtfbPlayerInfo {
         Ok(DtfbPlayerInfo {
             dtfb_id,
             itsf_id: lizenznr,
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
             championship_results,
             national_rankings,
             teams: player_teams,

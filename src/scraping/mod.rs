@@ -19,28 +19,11 @@ async fn download_itsf_players(
     db: &DatabaseRef,
     player_refs: &[players::PlayerRef],
     progress: Arc<BackgroundOperationProgress>,
-    force: bool,
+    _force: bool,
 ) -> Result<HashMap<String, i32>, String> {
     let mut player_ids = HashMap::new();
-    let mut missing_players: Vec<players::PlayerRef>;
+    let mut missing_players = player_refs.to_vec();
 
-    if force {
-        missing_players = player_refs.to_vec();
-    } else {
-        missing_players = player_refs
-            .iter()
-            .filter_map(|player_ref| match player_ref {
-                players::PlayerRef::Code(_) => Some(player_ref.clone()),
-                players::PlayerRef::License(itsf_lic) => match db.get_player(*itsf_lic) {
-                    None => Some(player_ref.clone()),
-                    Some(_) => {
-                        player_ids.insert(player_ref.key(), *itsf_lic);
-                        None
-                    }
-                },
-            })
-            .collect();
-    }
     if !missing_players.is_empty() {
         progress.set_progress(1, missing_players.len() + 1);
         progress.log(format!(
@@ -58,7 +41,6 @@ async fn download_itsf_players(
                 player_futures.push(async move {
                     let player = match &player_ref {
                         players::PlayerRef::Code(code) => players::download_player_info_by_code(code).await,
-                        players::PlayerRef::License(itsf_id) => players::download_player_info(*itsf_id).await,
                     };
                     player.map(|player| (player_ref, player))
                 });
@@ -76,7 +58,6 @@ async fn download_itsf_players(
                             players::PlayerRef::Code(code) => {
                                 players::download_player_image_by_code(code, player_id).await
                             }
-                            players::PlayerRef::License(itsf_id) => players::download_player_image(*itsf_id).await,
                         };
                         db.add_player(player);
                         player_ids.insert(player_ref.key(), player_id);
@@ -234,9 +215,35 @@ async fn download_and_store_dtfb_players(
             }
         }
 
-        let itsf_player_refs: Vec<players::PlayerRef> = downloaded_players
+        let player_code_futures = downloaded_players
             .iter()
-            .map(|player| players::PlayerRef::License(player.itsf_id))
+            .filter(|player| force || db.get_player(player.itsf_id).is_none())
+            .map(|player| async move {
+                let player_code =
+                    players::find_player_code_by_license(&player.first_name, &player.last_name, player.itsf_id).await;
+                (player, player_code)
+            })
+            .collect::<Vec<_>>();
+        let itsf_player_refs: Vec<players::PlayerRef> = join_all(player_code_futures)
+            .await
+            .into_iter()
+            .filter_map(|(player, player_code)| match player_code {
+                Ok(Some(code)) => Some(players::PlayerRef::Code(code)),
+                Ok(None) => {
+                    progress.warn(format!(
+                        "[ITSF] Could not find ITSF player code for DTFB={}, {} {} ({})",
+                        player.dtfb_id, player.first_name, player.last_name, player.itsf_id
+                    ));
+                    None
+                }
+                Err(err) => {
+                    progress.warn(format!(
+                        "[ITSF] Failed to resolve ITSF player code for DTFB={}, {} {} ({}): {}",
+                        player.dtfb_id, player.first_name, player.last_name, player.itsf_id, err
+                    ));
+                    None
+                }
+            })
             .collect();
         download_itsf_players(db, &itsf_player_refs, progress.clone(), force).await?;
 

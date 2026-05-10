@@ -9,20 +9,6 @@ pub enum PlayerCategory {
     SeniorFemale,
 }
 
-impl PlayerCategory {
-    pub fn try_from_str(category: &str) -> Result<Self, String> {
-        match category {
-            "MEN" => Ok(Self::Men),
-            "WOMEN" => Ok(Self::Women),
-            "JUNIOR MALE" => Ok(Self::JuniorMale),
-            "JUNIOR FEMALE" => Ok(Self::JuniorFemale),
-            "SENIOR MALE" => Ok(Self::SeniorMale),
-            "SENIOR FEMALE" => Ok(Self::SeniorFemale),
-            _ => Err(format!("invalid category: '{}'", category)),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(i8)]
 pub enum RankingCategory {

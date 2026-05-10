@@ -1,5 +1,4 @@
 use reqwest::Client;
-use scraper::Html;
 use serde::{de::DeserializeOwned, Serialize};
 
 async fn get(url: &str, headers: &[(&str, &str)]) -> Result<String, reqwest::Error> {
@@ -18,11 +17,6 @@ async fn get(url: &str, headers: &[(&str, &str)]) -> Result<String, reqwest::Err
 
 pub async fn download(url: &str, headers: &[(&str, &str)]) -> Result<String, String> {
     get(url, headers).await.map_err(|err| err.to_string())
-}
-
-pub async fn download_html(url: &str) -> Result<Html, String> {
-    let body = download(url, &[]).await?;
-    Ok(Html::parse_document(&body))
 }
 
 pub async fn post_json<T, R>(url: &str, headers: &[(&str, &str)], body: &T) -> Result<R, String>
