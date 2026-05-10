@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Mutex, MutexGuard, Weak};
 
 mod background;
@@ -330,8 +331,10 @@ async fn main() -> std::io::Result<()> {
 
     let database_path = std::env::var("DATABASE_URL").expect("DATABASE_URL missing from environment");
     let html_path = std::env::var("HTML_ROOT").expect("HTML_ROOT missing from environment");
-    let port = std::env::var("SERVER_PORT").expect("SERVER_PORT missing from environment");
-    let port = port.parse::<u16>().expect("invalid SERVER_PORT");
+    let port = std::env::var("SERVER_PORT")
+        .or_else(|_| std::env::var("PORT"))
+        .expect("SERVER_PORT or PORT missing from environment");
+    let port = port.parse::<u16>().expect("invalid SERVER_PORT or PORT");
     let state = AppState {
         data: data::DatabaseRef::load(&database_path),
         download: Mutex::new(Weak::new()),
@@ -354,6 +357,11 @@ async fn main() -> std::io::Result<()> {
             .service(actix_files::Files::new("", &html_path).index_file("start.html"))
     });
 
+    let bind_addresses = [
+        SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
+        SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+    ];
+
     log::info!("Starting HTTP server at http://localhost:{}", port);
-    server.bind(("0.0.0.0", port))?.run().await
+    server.bind(&bind_addresses[..])?.run().await
 }
