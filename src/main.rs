@@ -1,5 +1,5 @@
 use crate::data::{dtfb, itsf};
-use actix_web::{middleware::Logger, web, App, Error, HttpResponse, HttpServer};
+use actix_web::{http::StatusCode, middleware::Logger, web, App, Error, HttpResponse, HttpServer};
 use actix_web_httpauth::extractors::basic::BasicAuth;
 use chrono::Datelike;
 use serde::Deserialize;
@@ -74,9 +74,9 @@ async fn get_player(data: web::Data<AppState>, itsf_lic: web::Path<i32>) -> Resu
             player.dm_placements.sort_by_key(|placement| Reverse(placement.year));
             player.dtfl_teams.sort_by_key(|team| Reverse(team.year));
 
-            Ok(HttpResponse::Ok().json(json::ok(player)))
+            Ok(json::response(StatusCode::OK, json::ok(player)))
         }
-        None => Ok(HttpResponse::NotFound().json(json::err("No such player"))),
+        None => Ok(json::response(StatusCode::NOT_FOUND, json::err("No such player"))),
     }
 }
 
@@ -102,7 +102,7 @@ async fn list_players(data: web::Data<AppState>) -> Result<HttpResponse, Error> 
         })
         .collect();
 
-    Ok(HttpResponse::Ok().json(json::ok(players)))
+    Ok(json::response(StatusCode::OK, json::ok(players)))
 }
 
 #[actix_web::get("/image/{itsf_lic}.jpg")]
@@ -111,15 +111,29 @@ async fn get_player_image(data: web::Data<AppState>, itsf_lic: web::Path<i32>) -
 
     match data.data.get_player_image(itsf_lic) {
         Some(player_image) => {
-            let content_type = match player_image.image_format.as_str() {
-                "jpg" | "jpeg" => "image/jpeg",
-                _ => "application/octet-stream",
-            };
+            let content_type = image_content_type(&player_image);
             Ok(HttpResponse::Ok()
                 .append_header(("Content-Type", content_type))
                 .body(player_image.image_data))
         }
         None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+fn image_content_type(player_image: &data::PlayerImage) -> &'static str {
+    if player_image.image_data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if player_image.image_data.starts_with(b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if player_image.image_data.starts_with(b"<svg") || player_image.image_data.starts_with(b"<?xml") {
+        "image/svg+xml"
+    } else {
+        match player_image.image_format.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "svg" => "image/svg+xml",
+            _ => "application/octet-stream",
+        }
     }
 }
 
@@ -157,7 +171,7 @@ async fn download_status(data: web::Data<AppState>) -> Result<HttpResponse, Erro
             log: Vec::new(),
         },
     };
-    Ok(HttpResponse::Ok().json(json::ok(status)))
+    Ok(json::response(StatusCode::OK, json::ok(status)))
 }
 
 fn download_itsf(
@@ -168,7 +182,10 @@ fn download_itsf(
 ) -> Result<HttpResponse, Error> {
     let mut download = AppState::get_download(&data)?;
     if download.upgrade().is_some() {
-        return Ok(HttpResponse::BadRequest().json(json::err("Ranking query still in progress")));
+        return Ok(json::response(
+            StatusCode::BAD_REQUEST,
+            json::err("Ranking query still in progress"),
+        ));
     }
 
     let categories = vec![
@@ -184,7 +201,7 @@ fn download_itsf(
     ];
     *download = scraping::start_itsf_rankings_download(data.data.clone(), years, categories, classes, max_rank, force);
 
-    Ok(HttpResponse::Ok().json(json::ok("Started download")))
+    Ok(json::response(StatusCode::OK, json::ok("Started download")))
 }
 
 #[derive(Deserialize)]
@@ -225,21 +242,21 @@ async fn download_itsf_single(
     auth: BasicAuth,
 ) -> Result<HttpResponse, Error> {
     if !is_authorized(auth) {
-        return Ok(HttpResponse::Forbidden().json(json::err("not authorized")));
+        return Ok(json::response(StatusCode::FORBIDDEN, json::err("not authorized")));
     }
 
     let force = params.parse_force();
     let max_rank = params.max_rank.unwrap_or(1000);
     match params.parse_year() {
         Some(year) => download_itsf(data, vec![year], max_rank, force),
-        None => Ok(HttpResponse::BadRequest().json(json::err("invalid year"))),
+        None => Ok(json::response(StatusCode::BAD_REQUEST, json::err("invalid year"))),
     }
 }
 
 #[actix_web::post("/download_itsf_all")]
 async fn download_all_itsf(data: web::Data<AppState>, auth: BasicAuth) -> Result<HttpResponse, Error> {
     if !is_authorized(auth) {
-        return Ok(HttpResponse::Forbidden().json(json::err("not authorized")));
+        return Ok(json::response(StatusCode::FORBIDDEN, json::err("not authorized")));
     }
 
     let curr_year = chrono::Utc::now().naive_local().year();
@@ -256,12 +273,15 @@ fn download_dtfb(
 ) -> Result<HttpResponse, Error> {
     let mut download = AppState::get_download(&data)?;
     if download.upgrade().is_some() {
-        return Ok(HttpResponse::BadRequest().json(json::err("Ranking query still in progress")));
+        return Ok(json::response(
+            StatusCode::BAD_REQUEST,
+            json::err("Ranking query still in progress"),
+        ));
     }
 
     *download = scraping::start_dtfb_rankings_download(data.data.clone(), seasons, max_rank, force);
 
-    Ok(HttpResponse::Ok().json(json::ok("Started download")))
+    Ok(json::response(StatusCode::OK, json::ok("Started download")))
 }
 
 #[actix_web::post("/download_dtfb")]
@@ -271,21 +291,21 @@ async fn download_dtfb_single(
     auth: BasicAuth,
 ) -> Result<HttpResponse, Error> {
     if !is_authorized(auth) {
-        return Ok(HttpResponse::Forbidden().json(json::err("not authorized")));
+        return Ok(json::response(StatusCode::FORBIDDEN, json::err("not authorized")));
     }
 
     let max_rank = params.max_rank.unwrap_or(1000);
     let force = params.parse_force();
     match params.parse_year() {
         Some(year) => download_dtfb(data, vec![year], max_rank, force),
-        None => Ok(HttpResponse::BadRequest().json(json::err("invalid year"))),
+        None => Ok(json::response(StatusCode::BAD_REQUEST, json::err("invalid year"))),
     }
 }
 
 #[actix_web::post("/download_dtfb_all")]
 async fn download_dtfb_all(data: web::Data<AppState>, auth: BasicAuth) -> Result<HttpResponse, Error> {
     if !is_authorized(auth) {
-        return Ok(HttpResponse::Forbidden().json(json::err("not authorized")));
+        return Ok(json::response(StatusCode::FORBIDDEN, json::err("not authorized")));
     }
 
     let curr_year = chrono::Utc::now().naive_local().year();
@@ -307,11 +327,11 @@ async fn add_player_comment(
     auth: BasicAuth,
 ) -> Result<HttpResponse, Error> {
     if !is_authorized(auth) {
-        return Ok(HttpResponse::Forbidden().json(json::err("not authorized")));
+        return Ok(json::response(StatusCode::FORBIDDEN, json::err("not authorized")));
     }
 
     data.data.add_player_comment(info.itsf_lic, info.comment.clone());
-    Ok(HttpResponse::Ok().json(json::ok("added comment")))
+    Ok(json::response(StatusCode::OK, json::ok("added comment")))
 }
 
 #[actix_web::main]
