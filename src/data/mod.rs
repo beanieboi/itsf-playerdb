@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::HashMap,
     sync::{Arc, Mutex},
 };
@@ -42,7 +41,7 @@ pub struct PlayerImage {
 }
 
 struct DatabaseInner {
-    db: RefCell<db::DbConnection>,
+    db: db::DbConnection,
     players: HashMap<i32, Player>,
 }
 
@@ -54,7 +53,7 @@ pub struct DatabaseRef {
 
 impl DatabaseRef {
     pub fn load(path: &str, image_directory: &str) -> Self {
-        let mut db = db::DbConnection::open(path);
+        let db = db::DbConnection::open(path);
         let mut players = HashMap::new();
 
         for player_id in db.get_player_ids() {
@@ -63,10 +62,7 @@ impl DatabaseRef {
         }
         log::error!("Loaded {} players", players.len());
 
-        let inner = DatabaseInner {
-            db: RefCell::new(db),
-            players,
-        };
+        let inner = DatabaseInner { db, players };
 
         let path_info = std::fs::metadata(image_directory).unwrap_or_else(|_| panic!("Can't open {}", image_directory));
         assert!(path_info.is_dir(), "Not a directory: {}", image_directory);
@@ -89,7 +85,7 @@ impl DatabaseRef {
 
     pub fn add_player(&self, player: Player) {
         let mut inner = self.inner.lock().unwrap();
-        inner.db.borrow_mut().write_player_json(player.itsf_id, &player);
+        inner.db.write_player_json(player.itsf_id, &player);
         inner.players.insert(player.itsf_id, player);
     }
 
@@ -118,7 +114,7 @@ impl DatabaseRef {
         }
 
         if let Some(player) = inner.players.get(&itsf_id) {
-            inner.db.borrow_mut().write_player_json(itsf_id, &player);
+            inner.db.write_player_json(itsf_id, &player);
         }
     }
 
@@ -163,5 +159,4 @@ impl DatabaseRef {
             player.comments.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
         });
     }
-
 }

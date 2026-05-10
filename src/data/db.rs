@@ -1,3 +1,4 @@
+use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
 use diesel::{prelude::*, Insertable, Queryable};
 use serde::de::DeserializeOwned;
@@ -13,7 +14,7 @@ struct DbPlayer {
 }
 
 pub struct DbConnection {
-    conn: SqliteConnection,
+    pool: Pool<ConnectionManager<SqliteConnection>>,
 }
 
 fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
@@ -25,30 +26,37 @@ fn expect_result<T>(result: Result<T, diesel::result::Error>) -> T {
 
 impl DbConnection {
     pub fn open(path: &str) -> Self {
-        let conn = SqliteConnection::establish(path).expect("Failed to open DB");
-        Self { conn }
+        let manager = ConnectionManager::<SqliteConnection>::new(path);
+        let pool = Pool::builder()
+            .max_size(5)
+            .test_on_check_out(true)
+            .build(manager)
+            .expect("Could not build connection pool");
+        Self { pool }
     }
 
-    pub fn get_player_ids(&mut self) -> Vec<i32> {
+    pub fn get_player_ids(&self) -> Vec<i32> {
         use crate::schema::players::dsl;
 
-        let ids = dsl::players.select(dsl::itsf_id).load(&mut self.conn);
+        let conn = &mut self.pool.get().expect("Failed to get DB connection");
+        let ids = dsl::players.select(dsl::itsf_id).load(conn);
 
         expect_result(ids)
     }
 
-    pub fn write_player_json<T: Serialize>(&mut self, itsf_id: i32, data: &T) {
+    pub fn write_player_json<T: Serialize>(&self, itsf_id: i32, data: &T) {
         let json_data = serde_json::to_vec(&data).expect("JSON serialization failed");
         let player = DbPlayer { itsf_id, json_data };
 
         use crate::schema::players::dsl;
 
+        let conn = &mut self.pool.get().expect("Failed to get DB connection");
         let result = diesel::insert_into(dsl::players)
             .values(&player)
             .on_conflict(dsl::itsf_id)
             .do_update()
             .set(&player)
-            .execute(&mut self.conn);
+            .execute(conn);
 
         let result = expect_result(result);
         if result != 1 {
@@ -56,12 +64,13 @@ impl DbConnection {
         }
     }
 
-    pub fn read_player_json<T: DeserializeOwned>(&mut self, itsf_id: i32) -> Result<T, String> {
+    pub fn read_player_json<T: DeserializeOwned>(&self, itsf_id: i32) -> Result<T, String> {
         use crate::schema::players::dsl;
 
+        let conn = &mut self.pool.get().expect("Failed to get DB connection");
         let player = dsl::players
             .filter(dsl::itsf_id.eq(itsf_id))
-            .first::<DbPlayer>(&mut self.conn)
+            .first::<DbPlayer>(conn)
             .optional();
 
         match expect_result(player) {
