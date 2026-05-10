@@ -1,11 +1,14 @@
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
 use diesel::{prelude::*, Insertable, Queryable};
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::data::PlayerImage;
 use crate::schema::*;
+
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[derive(Queryable, Insertable, AsChangeset)]
 #[diesel(table_name = players)]
@@ -41,6 +44,10 @@ impl DbConnection {
             .test_on_check_out(true)
             .build(manager)
             .expect("Could not build connection pool");
+        pool.get()
+            .expect("Failed to get DB connection")
+            .run_pending_migrations(MIGRATIONS)
+            .expect("Failed to run DB migrations");
         Self { pool }
     }
 
